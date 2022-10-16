@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -101,14 +103,52 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
+  // if(pte == 0)
+  // {
+  //   if(lazyalloc(va)==0)
+  //     pte = walk(pagetable, va, 0);
+  //   else
+  //   return 0;}
+  // if((*pte & PTE_V) == 0){
+  //   if(lazyalloc(va)==0)
+  //     pte = walk(pagetable, va, 0);
+  //   else
+  //   return 0;}
+  if((pte==0)||((*pte & PTE_V) == 0))
+  {
+    if(lazyalloc(va)==0)
+      pte = walk(pagetable, va, 0);
+    else
     return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  }
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
   return pa;
+}
+
+
+int lazyalloc(uint64 addr){
+    struct proc *p = myproc();
+    // printf("Page fault at address %p");
+    if(addr >= p->sz||addr<p->trapframe->sp){
+      // printf("trap: addr %p is out of range");
+      return -1;
+    }
+
+      char* mem = kalloc();
+      if(mem == 0){
+        // printf("trap: out of memory");
+        return -1;}
+
+        memset(mem, 0, PGSIZE);
+        // 利用pagegounddown函数，将addr向下取整到页边界
+        if(mappages(p->pagetable, PGROUNDDOWN(addr), PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+          // printf("trap: out of memory (2)");
+          kfree(mem);
+          return -1;
+        }
+        return 0;
 }
 
 // add a mapping to the kernel page table.
@@ -181,9 +221,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      // panic("uvmunmap: walk");
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      // panic("uvmunmap: not mapped");
+      continue;
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -315,9 +357,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      // panic("uvmcopy: pte should exist");
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      // panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
