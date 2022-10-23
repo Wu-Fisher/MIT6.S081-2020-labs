@@ -304,10 +304,31 @@ sys_open(void)
       return -1;
     }
   } else {
+    // 上面是创造，这里就是打开类型
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
     }
+    if(ip->type == T_SYMLINK && !(omode&O_NOFOLLOW)){
+      // hint for recycle
+      int cnt=0;
+      while((ip=namei(ip->target))){
+        if(ip->type!=T_SYMLINK)
+          break;
+        cnt++;
+        if(cnt>=MAXSYMBOLICTHRESHOLD){
+          end_op();
+          return -1;
+        }
+      }
+      // 13 时刻，这里刚刚重复判断这个🦅东西为空，结果导致ilock panic 乐
+        if(ip==0)
+        {
+          end_op();
+          return -1;
+        }
+      }
+          
     ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
@@ -482,5 +503,34 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void){
+
+  char target[MAXPATH];
+  char path[MAXPATH];
+
+  int lt, lp;
+
+  struct inode *ip;
+  if( (lt = argstr(0, target, MAXPATH)) < 0 ||
+     (lp = argstr(1, path, MAXPATH)) < 0){
+    return -1;
+  }
+
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  // hh这里没有用iwrite其实是我后续学习symbolic link的时候发现的 pyl大佬的用字段来存储的，我觉得逻辑更加清晰，就用这个了
+  memset(ip->target, 0, MAXPATH);
+  memmove(ip->target, target, lt>MAXPATH?MAXPATH :lt);
+
+  iunlockput(ip);
+  end_op();
   return 0;
 }
