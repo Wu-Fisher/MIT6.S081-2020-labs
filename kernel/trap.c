@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
+
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,7 +72,57 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  else if(r_scause()==13||r_scause()==15){
+
+    // page fault
+    uint64 va = r_stval();
+        // printf("page fault va %p\n", va);
+    va = PGROUNDDOWN(va);
+    struct proc *p = myproc();
+    struct VMA *vma=0;
+    for(int i=0;i<NOFILE;i++)
+    {
+      if(p->vmas[i].valid==0&&p->vmas[i].start<=va&&p->vmas[i].end>=va)
+      {
+        vma=&p->vmas[i];
+        break;
+      }
+    }
+    if(vma==0){
+      printf("vma fault\n");
+      p->killed=1;
+      exit(-1);
+    }
+    char* mem=0;
+    if((mem=(char*)kalloc())==0){
+      printf("kalloc fault\n");
+      p->killed=1;
+      exit(-1);
+    }
+    int pflag=PTE_U;
+    if(vma->prot&PROT_WRITE)
+      pflag|=PTE_W;
+    if(vma->prot&PROT_EXEC)
+      pflag|=PTE_X;
+    if(vma->prot&PROT_READ)
+      pflag|=PTE_R;
+    memset(mem,0,PGSIZE);
+    if(mappages(p->pagetable,va,PGSIZE,(uint64)mem,pflag)!=0){
+      printf("mappages fault\n");
+      kfree(mem);
+      p->killed=1;
+      exit(-1);
+    }
+    ilock(vma->f->ip);
+    readi(vma->f->ip, 1,va, va - vma->start+vma->offset, PGSIZE);
+    iunlock(vma->f->ip);
+
+    // pte_t *pte =walk(p->pagetable,va,1);
+    
+    // printf("pte %p\n",*pte &(vma->prot|PTE_U|PTE_V));
+    }
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
@@ -79,7 +134,6 @@ usertrap(void)
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
-
   usertrapret();
 }
 

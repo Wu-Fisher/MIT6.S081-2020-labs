@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -484,3 +485,114 @@ sys_pipe(void)
   }
   return 0;
 }
+
+
+uint64
+sys_mmap(void){
+  uint64 addr;
+  uint64 length;
+  int prot;
+  int flags;
+  int fd;
+  struct file *f;
+  uint64 offset;
+
+  if(argaddr(0,&addr)<0||argaddr(1,&length)<0||argint(2,&prot)<0||argint(3,&flags)<0||argfd(4,&fd,&f)<0||argaddr(5,&offset)<0){
+    return -1;
+  }
+  
+  if(!f->readable&&(prot & PROT_READ)){
+    return -1;
+  }
+  if(!f->writable&&(prot & PROT_WRITE)&&(flags & MAP_SHARED)){
+    return -1;
+  }
+
+  struct proc *p = myproc();
+ 
+  struct VMA *vma=0 ;
+  for(int i=0;i<NOFILE;i++){
+    if(p->vmas[i].valid==1)
+    {
+      vma = &p->vmas[i];
+      break;
+    }
+  }
+  if(vma){
+  vma->start = PGROUNDDOWN(p->vmas_top-length);
+  vma->end = PGROUNDDOWN(p->vmas_top);
+  vma->length = length;
+  vma->prot = prot;
+  vma->flags = flags;
+  // printf("vma->flags = %d\n",vma->flags);
+  vma->fd = fd;
+  vma->offset = offset;
+  // printf("vma->offset = %d\n",vma->offset);
+  vma->valid = 0;
+  vma->f = f;
+  p->vmas_top = vma->start;
+  filedup(f);
+  }else{
+    return -1;
+  }
+  // printf("vmacall\n");
+  // printf("%p\n",MAXVA);
+  // printf("%p\n",PGSIZE);
+  // printf("vma->start:%p\n",vma->start);
+  // printf("vma->end:%p\n",vma->end);
+    return vma->start;
+
+}
+
+uint64
+sys_munmap(void){
+  uint64 addr;
+  uint64 length;
+  if(argaddr(0,&addr)<0||argaddr(1,&length)<0){
+    return -1;
+  }
+
+  struct proc *p = myproc();
+  // printf("munaddr = %p\n",addr);
+  // printf("munlength = %p\n",length);
+  for(int i=0;i<NOFILE;i++){
+    // if(p->vmas[i].valid==0&&p->vmas[i].start<=addr&&p->vmas[i].end>=addr)
+    if(p->vmas[i].valid==0 && PGROUNDDOWN(addr)==p->vmas[i].start)
+    {
+      struct VMA *vma = &p->vmas[i];
+      if(walkaddr(p->pagetable,vma->start)){
+        if(vma->flags==MAP_SHARED){
+            // filewrite(vma->f,vma->start,length);
+            // begin_op();
+            // ilock(vma->f->ip);
+            // writei(vma->f->ip,1,vma->start,vma->offset,length);
+            // iunlock(vma->f->ip);
+            // end_op();
+            filewrite_offset(vma->f,vma->start,length,vma->offset);
+        }
+        uvmunmap(p->pagetable,vma->start,length/PGSIZE,1);
+      }
+      // else{
+      //   return -1;
+      // }
+
+      vma->start +=length;
+      if(vma->start==vma->end){
+        vma->f->ref--;
+        vma->valid = 1;
+      }
+
+      uint64 cur = MAXMMAP;
+      for(int i=NOFILE-1;i>=0;i--){
+        if(p->vmas[i].valid==0&&p->vmas[i].start<cur){
+          cur = p->vmas[i].start;
+        }
+      }
+      p->vmas_top = cur;  
+      return 0;
+
+    }
+
+    }
+    return -1;
+  }

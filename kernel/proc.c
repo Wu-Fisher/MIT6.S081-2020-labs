@@ -6,6 +6,10 @@
 #include "proc.h"
 #include "defs.h"
 
+#include "fcntl.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -133,6 +137,13 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  for(int i =0; i < NOFILE; i++){
+    p->vmas[i].valid = 1;
+  }
+  p->vmas_top = MAXMMAP;
+
+  
 
   return p;
 }
@@ -298,6 +309,23 @@ fork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  np->vmas_top = p->vmas_top;
+  for(int i = 0;i<NOFILE;i++){
+    if(p->vmas[i].valid==0&&p->vmas[i].f!=0){
+      p->vmas[i].f->ref++;
+    }
+    np->vmas[i].start = p->vmas[i].start;
+    np->vmas[i].end = p->vmas[i].end;
+    np->vmas[i].valid = p->vmas[i].valid;
+    np->vmas[i].f = p->vmas[i].f;
+    np->vmas[i].offset = p->vmas[i].offset;
+    np->vmas[i].length = p->vmas[i].length;
+    np->vmas[i].prot = p->vmas[i].prot;
+    np->vmas[i].fd = p->vmas[i].fd;
+    np->vmas[i].flags = p->vmas[i].flags;
+    
+  }
+
   pid = np->pid;
 
   np->state = RUNNABLE;
@@ -352,6 +380,29 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+  for(int i=0;i<NOFILE;i++){
+    if(p->vmas[i].valid==0){
+      struct VMA *vma = &p->vmas[i];
+      if(walkaddr(p->pagetable,vma->start)!=0){
+        if(vma->flags==MAP_SHARED)
+        {
+          // filewrite(vma->f,vma->start,vma->end-vma->start);
+          filewrite_offset(vma->f,vma->start,vma->end-vma->start,vma->offset);
+          // begin_op();
+          // ilock(vma->f->ip);
+          // writei(vma->f->ip,1,vma->start,vma->offset,vma->end-vma->start);
+          // iunlock(vma->f->ip);
+          // end_op();
+        }
+        uvmunmap(p->pagetable,vma->start,(vma->end-vma->start)/PGSIZE,1);
+      }
+      vma->valid=1;
+      vma->f->ref--;
+    }
+  }
+
+  p->vmas_top = MAXMMAP;
 
   begin_op();
   iput(p->cwd);
